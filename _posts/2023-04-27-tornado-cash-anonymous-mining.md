@@ -75,4 +75,47 @@ $$ APAmount = rate * passedBlocks $$
 
     A user could provide a pair of valid deposit & withdraw commitment  at any time to get his AP to a virtual account. So there is another account tree whose leaf data contains account’s AP amount, secret and the nullifier. Also the account’s AP amount can be accumulated from multiple deposit/withdraw commitment pair and transferred to another account.
 
-    ![Desktop View](./posts/20230427/tornado-anonymous-mining-architecture.png){: width="972" height="589" .w-75 .normal}
+
+
+### Interactions and code details
+
+1. User deposit/withdraw through Proxy contract, which will register user’s mining deposit/withdrawal commitment in Miner.
+
+    ```ts
+
+    function deposit(
+        ITornadoInstance _tornado,
+        bytes32 _commitment,
+        bytes calldata _encryptedNote
+    ) public payable virtual {
+        Instance memory instance = instances[_tornado];
+        require(instance.state != InstanceState.DISABLED, "The instance is not supported");
+
+        if (instance.isERC20) {
+            instance.token.safeTransferFrom(msg.sender, address(this), _tornado.denomination());
+        }
+        _tornado.deposit{ value: msg.value }(_commitment);
+
+            // if the tornado instance is mineble
+        if (instance.state == InstanceState.MINEABLE) {
+            tornadoTrees.registerDeposit(address(_tornado), _commitment);
+        }
+        emit EncryptedNote(msg.sender, _encryptedNote);
+    }
+
+    /// @dev Queue a new deposit data to be inserted into a merkle tree
+    /// leaf: keccak256(abi.encode(_instance, _commitment, blockNumber()))
+    /// store the deposit leaf in a mapping
+    function registerDeposit(address _instance, bytes32 _commitment) public onlyTornadoProxy {
+        uint256 _depositsLength = depositsLength;
+        deposits[_depositsLength] = keccak256(abi.encode(_instance, _commitment, blockNumber()));
+        emit DepositData(_instance, _commitment, blockNumber(), _depositsLength);
+        depositsLength = _depositsLength + 1;
+    }
+
+    ```
+
+2. The community or the other Joe call the TornadoTrees contract to update deposit tree.
+
+![Desktop View](/assets/blogImg/20230427/tornado-anonymous-mining-architecture.png){: width="972" height="589" }
+_tornado.cash anonymous mining interactions flow_
