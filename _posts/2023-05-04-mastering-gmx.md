@@ -2,7 +2,6 @@
 layout: post
 title: Mastering GMX
 date: '2023-05-04 20:14:35 +0800'
-# categories: [ZK, ]
 tags: [defi]
 math: true
 ---
@@ -165,8 +164,89 @@ Gambit成功的核心在于提供了较好的合约交易用户体验，产生�
     == 稳定币开多为什么不行，非稳定币开空为什么不行 ==
    
    考虑LP的资金利用率，开哪个币种的多仓，就向LP借哪个币种；用哪个币种开空，就向LP借哪个币种。这样池子里的所有资产都可以被利用到
+  
+7. 流动性及swap部分机制设计：
+   - 添加流动性：
+     LP持有WBTC或其他白名单资产，在添加流动性时，GLP manager将资产从用户账户转移到vault，vault向GLP manager发放USDG债务，GLP manager向LP用户发放GLP。相当于GLP manager是USDG的一个中间承兑方
 
-7. 风控机制：
+    ![Desktop View](/assets/blogImg/20230504/addLiquidity.png){: width="972" height="589" }
+
+   - 移除流动性时，GLP manager会根据用户需要赎回的GLP数量和价格计算出其USDG价值并burn掉用户的   GLP代币，随后GLP manager将相应的USDG债务卖出给vault，赎回的pool资产会由vault转给LP
+  
+    ![Desktop View](/assets/blogImg/20230504/removeLiquidity.png){: width="972" height="589" }
+
+   - swap
+    ![Desktop View](/assets/blogImg/20230504/swap.png){: width="972" height="589" }
+
+8. 合约交易机制：
+   
+     1. 需求：
+         - 用户随时开/平仓，计算多空用户即时的P&L
+         - 计算每个用户的fundingFee（borrowFee）
+         - LP随时进出，需要计算**GLP定价**，计算**LP的即时P&L**，计算**即时的LP总资产价值**（AUM）
+
+     2. 实现：
+         - fundingFee计算 
+     
+           1. 用户：entryFundingRate
+
+              当用户仓位发生变化（开仓、清仓）时更新
+
+           2. 全局：cumulativeFundingRate
+              每当有用户和合约进行交互时检查更新
+
+              $$borrowFeeRate = \frac {assets  Borrowed}{LPAssetsInPool} \times 0.01\%$$
+
+              $$cumulativeFundingRate = cumulativeFundingRate_{before} + \frac {now - lastUpdatedTime}{1h} \times borrowFeeRate$$
+
+              $$fundingFee=size\times(cumulativeFundingRate-entryFundingRate)$$
+
+           3. 收费规则：每当用户增/减仓位时收取该段时间内的fundingFee
+
+         - 用户的即时P&L
+  
+           - 仓位机制：一个方向（多or空），一种标的只能持有一个仓位，合约会对同方向、同标的的仓位在开仓时进行自动合并
+  
+           - averagePrice：持仓均价，标的物⇒ USDG价格；增加仓位会影响持仓均价，减仓/关仓不会影响持仓均价
+            $$ Price_{average}= \frac{PositionCost_{total}}{PositionSize_{total}} =\frac {Price_{averageBefore}\times PositionSize_{before} + Price_{now}\times\Delta PositionSize}{PositionSize_{before}+\Delta PositionSize} $$
+
+           - P&L计算
+  
+              $$ P\&L_{long}=(Price_{now}-AveragePrice)\times PositionSize$$
+
+              $$P\&L_{short} = -(Price_{now}-AveragePrice)\times PositionSize$$
+
+           - LP的即时P&L
+
+              $$ P\&L_{LP}=-(P\&L_{globalLong}+P\&L_{globalShort})$$
+              - 全体空头的P&L:
+                - globalShortPositionSize[indexToken]: 每当有用户仓位变化时更新
+                - globalShortPrice[indexToken]：每当有用户增加仓位时更新
+
+                  $$P\&L_{globalShort}=\sum-(Price_{now_i}-Price_{globalShortAverage_i})\times globalPositionShortSize_i$$
+
+                  注：在vault合约记录globalShortPosition信息时没有对DAI，USDT等不同抵押品作区分，即认为不同的稳定币抵押品的价格都一致，即为$1。GMX使用额外的shortTracker额外记录了一份全局空头的状态，和vault的取加权平均以解决稳定币价格脱锚的问题。当前的合约shortTracker状态的权重是1
+
+           - 全局多头用户的$ P\&L$:
+  
+            $ P\&L_{globalLong}$的计算方式与$ P\&L_{globalShort}$不同
+
+            $$ P\&L_{globalLong}=\sum (BorrowedAssetValue_{now_i}+CollateralValue_{now_i}-BorrowedAssetValue_{before_i}-CollateralValue_{before_i})=\sum(BorrowedAssetValue_{now_i} - BorrowedAssetValue_{before_i})$$
+
+           - GLP定价
+            $$ Price_{GLP}=\frac {LiquidityValue}{GLPSupply}$$
+
+          例：用户在价格$1500用1 ETH开10x多仓，则用户仓位10ETH，价值15000USDG；仓位手续费0.01%，即0.01ETH；仓位中：用户抵押品1485USDG，LP借给用户9.01ETH
+          假设ETH价格上涨到$3000，则此时用户P&L为：（3000- 1500）/ 1500 x 15000 = $15000。
+          用户全部平仓，假设平仓手续费+资金费为35USDG，则用户最终收到（1450 + 15000） / 3000 = **5.48ETH**
+
+
+
+
+
+
+
+1.  风控机制：
 
    - 100%储备金机制
 
@@ -193,7 +273,7 @@ Gambit成功的核心在于提供了较好的合约交易用户体验，产生�
 
      - 将用户的交易拆分成挂单-成交两笔交易，实际成交交易由keeper延迟触发，使得套利者无法利用价格抢跑套利
 
-8. 预言机与mark price合成
+2.  预言机与mark price合成
 
    - maxPrice 和minPrice，对不同的场景设定获取不同的price，降低攻击者利用价格套利的风险，也可以归属于风控的一部分
 
