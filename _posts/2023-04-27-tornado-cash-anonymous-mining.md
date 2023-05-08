@@ -1,9 +1,9 @@
 ---
 layout: post
 title: Tornado.cash-anonymous-mining
-date: '2023-04-27 15:23:35 +0800'
+date: '2023-04-27 19:23:35 +0800'
 # categories: [ZK, ]
-tags: [zero-knowledge]
+tags: [zero-knowledge-proofs]
 math: true
 ---
 
@@ -81,7 +81,7 @@ $$ APAmount = rate * passedBlocks $$
 
 1. User deposit/withdraw through Proxy contract, which will register user’s mining deposit/withdrawal commitment in Miner.
 
-    ```ts
+    ``` 
 
     function deposit(
         ITornadoInstance _tornado,
